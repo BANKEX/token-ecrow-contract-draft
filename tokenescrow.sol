@@ -22,7 +22,7 @@ contract IToken {
 contract TokenEscrow is usingOraclize {
   address owner;
   
-  uint public ETH_TO_USD_EXCHANGE_RATE = 700;
+  uint public ETH_TO_USD_CENT_EXCHANGE_RATE = 31736;
   event newOraclizeQuery(string description);
 
   modifier owneronly { if (msg.sender == owner) _; }
@@ -45,7 +45,6 @@ contract TokenEscrow is usingOraclize {
 	tokenSupplies[0] = TokenSupply(1000000, 0, 20);
 	tokenSupplies[1] = TokenSupply(2000000, 0, 30);
 	
-	oraclize_setNetwork(1);
 	// FIXME: enable oraclize_setProof is production
     // oraclize_setProof(proofType_TLSNotary | proofStorage_IPFS);
     update(0);
@@ -62,8 +61,8 @@ contract TokenEscrow is usingOraclize {
   function __callback(bytes32 myid, string result, bytes proof) {
     if (msg.sender != oraclize_cbAddress()) throw;
     
-    ETH_TO_USD_EXCHANGE_RATE = parseInt(result, 2); // save it in storage as $ cents
-    // update(60); // FIXME: comment this out to enable recursive price updates
+    ETH_TO_USD_CENT_EXCHANGE_RATE = parseInt(result, 2); // save it in storage as $ cents
+    // update(60 * 60); // FIXME: comment this out to enable recursive price updates once in every hour
   }
 
   function update(uint delay) payable {
@@ -85,54 +84,43 @@ contract TokenEscrow is usingOraclize {
   
   // Incoming transfer from the buyer
   function() payable {
-    newOraclizeQuery("Step 0");
-      
-    if (ETH_TO_USD_EXCHANGE_RATE == 0)
+    if (ETH_TO_USD_CENT_EXCHANGE_RATE == 0)
       throw;
-      
-    newOraclizeQuery("Step 1");
-  
+    
     Escrow escrow = escrows[msg.sender];
 
     // Contract not set up
     if (escrow.token == 0)
       throw;
 
-    newOraclizeQuery("Step 2");      
-
     IToken token = IToken(escrow.token);
     
-    newOraclizeQuery("Step 3");
-
 	uint tokenAmount = 0;
 	uint amountOfCentsToBePaid = 0;
-	uint amountOfCentsTransfered = msg.value * ETH_TO_USD_EXCHANGE_RATE;
+	uint amountOfCentsTransfered = msg.value * ETH_TO_USD_CENT_EXCHANGE_RATE / 1 ether;
 		
 	for (uint discountIndex = 0; discountIndex < 2; discountIndex++) {
-	  TokenSupply tokenSupply = tokenSupplies[discountIndex];
-	  uint tokensPossibleToBuy = (tokenSupply.limit - tokenSupply.totalSupply) / amountOfCentsTransfered;
-	  
-	  tokenSupply.totalSupply += tokensPossibleToBuy;
-	  tokenAmount += tokensPossibleToBuy;
-	  amountOfCentsToBePaid += tokensPossibleToBuy * tokenSupply.priceInCentsPerToken;
-	  amountOfCentsTransfered -= amountOfCentsToBePaid;
+		  if (amountOfCentsTransfered <= 0) {
+			  break;
+		  }
+		  TokenSupply tokenSupply = tokenSupplies[discountIndex];
+		  uint tokensPossibleToBuy = (tokenSupply.limit - tokenSupply.totalSupply) * tokenSupply.priceInCentsPerToken / amountOfCentsTransfered;
+		  
+		  tokenSupply.totalSupply += tokensPossibleToBuy;
+		  tokenAmount += tokensPossibleToBuy;
+		  amountOfCentsToBePaid += tokensPossibleToBuy * tokenSupply.priceInCentsPerToken;
+		  amountOfCentsTransfered -= amountOfCentsToBePaid;
     }
     
-    newOraclizeQuery("Step 4");
-
     // Transfer tokens to buyer
     token.transfer(escrow.recipient, tokenAmount);
     
-    newOraclizeQuery("Step 5");
-
     // Transfer money to seller
-	uint amountOfEthToBePaid = amountOfCentsToBePaid / ETH_TO_USD_EXCHANGE_RATE;
+	uint amountOfEthToBePaid = amountOfCentsToBePaid * 1 ether / ETH_TO_USD_CENT_EXCHANGE_RATE;
     escrow.seller.transfer(amountOfEthToBePaid);
 
-   newOraclizeQuery("Step 6");
-
     // Refund buyer if overpaid
-    msg.sender.transfer(amountOfEthToBePaid - msg.value);
+    msg.sender.transfer(msg.value - amountOfEthToBePaid);
   }
 
   function kill() owneronly {
