@@ -19,10 +19,61 @@ contract IToken {
   function transfer(address _to, uint _value) returns (bool success);
 }
 
-contract TokenEscrow is usingOraclize {
+contract TokenEscrow is usingOraclize, IToken {
+    string public standard = 'PBKXToken 0.1';
+    string public name = 'PBKXToken';
+    string public symbol = 'PBKX';
+	
+	event Burn(address indexed from, uint256 value);
+
+    mapping (address => uint) balanceFor;
+	
+	address[] addressByIndex;
+	
+	function balanceOf(address _address) constant returns (uint balance) {
+		return balanceFor[_address];
+	}
+	
+	function exchangeToIco(address _icoToken, uint exchangeRate) owneronly {
+	    IToken icoToken = IToken(_icoToken);
+		for (uint ai = 0; ai < addressByIndex.length; ai++) {
+			address currentAddress = addressByIndex[ai];
+			icoToken.transfer(currentAddress, balanceFor[currentAddress] * exchangeRate);
+			balanceFor[currentAddress] = 0;
+		}
+	}
+	
+	function transferFromOwner(address _to, uint256 _value) private returns (bool success) {
+        if (balanceFor[owner] < _value) throw;                 // Check if the owner has enough
+        if (balanceFor[_to] + _value < balanceFor[_to]) throw;  // Check for overflows
+        balanceFor[owner] -= _value;                          // Subtract from the owner
+        balanceFor[_to] += _value;                            // Add the same to the recipient
+        return true;
+    }
+	
+    function transfer(address _to, uint _value) returns (bool success) {
+        if (balanceFor[msg.sender] < _value) throw;           // Check if the sender has enough
+        if (balanceFor[_to] + _value < balanceFor[_to]) throw; // Check for overflows
+        balanceFor[msg.sender] -= _value;                     // Subtract from the sender
+		if (balanceFor[_to] == 0) {
+		    addressByIndex.length++;
+			addressByIndex[addressByIndex.length-1] = _to;
+		}
+        balanceFor[_to] += _value;                            // Add the same to the recipient
+        return true;
+    }
+	
+	function burn(uint256 _value) returns (bool success) {
+        if (balanceFor[msg.sender] < _value) throw;            // Check if the sender has enough
+        balanceFor[msg.sender] -= _value;                      // Subtract from the sender
+        Burn(msg.sender, _value);
+        return true;
+    }  
+    
   address owner;
   
-  uint public ETH_TO_USD_CENT_EXCHANGE_RATE = 31736;
+  uint public ETH_TO_USD_CENT_EXCHANGE_RATE = 32283;
+  
   event newOraclizeQuery(string description);
 
   modifier owneronly { if (msg.sender == owner) _; }
@@ -42,6 +93,8 @@ contract TokenEscrow is usingOraclize {
   function TokenEscrow() {
     owner = msg.sender;
 	
+	balanceFor[msg.sender] = 3000000;              // Give the creator all initial tokens
+	
 	tokenSupplies[0] = TokenSupply(1000000, 0, 20);
 	tokenSupplies[1] = TokenSupply(2000000, 0, 30);
 	
@@ -51,7 +104,6 @@ contract TokenEscrow is usingOraclize {
   }
 
   struct Escrow {
-    address token;           // address of the token contract
     address seller;          // seller's address
     address recipient;       // address to receive the tokens
   }
@@ -74,12 +126,17 @@ contract TokenEscrow is usingOraclize {
     }
   }
   
-  function create(address token, address seller, address buyer, address recipient) owneronly {
-    escrows[buyer] = Escrow(token, seller, recipient);
+  function create(address buyer, address recipient) owneronly {
+    escrows[buyer] = Escrow(owner, recipient);
   }
 
-  function create(address token, address seller, address buyer) owneronly {
-    create(token, seller, buyer, buyer);
+  function create(address buyer) owneronly {
+    create(buyer, buyer);
+  }
+
+  function min(uint a, uint b) private returns (uint) {
+    if (a < b) return a;
+    else return b;
   }
   
   // Incoming transfer from the buyer
@@ -88,12 +145,6 @@ contract TokenEscrow is usingOraclize {
       throw;
     
     Escrow escrow = escrows[msg.sender];
-
-    // Contract not set up
-    if (escrow.token == 0)
-      throw;
-
-    IToken token = IToken(escrow.token);
     
 	uint tokenAmount = 0;
 	uint amountOfCentsToBePaid = 0;
@@ -104,7 +155,8 @@ contract TokenEscrow is usingOraclize {
 			  break;
 		  }
 		  TokenSupply tokenSupply = tokenSupplies[discountIndex];
-		  uint tokensPossibleToBuy = (tokenSupply.limit - tokenSupply.totalSupply) * tokenSupply.priceInCentsPerToken / amountOfCentsTransfered;
+		  uint moneyForTokensPossibleToBuy = min((tokenSupply.limit - tokenSupply.totalSupply) * tokenSupply.priceInCentsPerToken,  amountOfCentsTransfered);
+		  uint tokensPossibleToBuy = moneyForTokensPossibleToBuy / tokenSupply.priceInCentsPerToken;
 		  
 		  tokenSupply.totalSupply += tokensPossibleToBuy;
 		  tokenAmount += tokensPossibleToBuy;
@@ -113,12 +165,13 @@ contract TokenEscrow is usingOraclize {
     }
     
     // Transfer tokens to buyer
-    token.transfer(escrow.recipient, tokenAmount);
+    transferFromOwner(escrow.recipient, tokenAmount);
     
     // Transfer money to seller
 	uint amountOfEthToBePaid = amountOfCentsToBePaid * 1 ether / ETH_TO_USD_CENT_EXCHANGE_RATE;
+	
     escrow.seller.transfer(amountOfEthToBePaid);
-
+    
     // Refund buyer if overpaid
     msg.sender.transfer(msg.value - amountOfEthToBePaid);
   }
