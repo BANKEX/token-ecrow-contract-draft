@@ -47,6 +47,10 @@ contract TokenEscrow is usingOraclize, IToken {
         if (balanceFor[owner] < _value) throw;                 // Check if the owner has enough
         if (balanceFor[_to] + _value < balanceFor[_to]) throw;  // Check for overflows
         balanceFor[owner] -= _value;                          // Subtract from the owner
+		if (balanceFor[_to] == 0) {
+		    addressByIndex.length++;
+			addressByIndex[addressByIndex.length-1] = _to;
+		}
         balanceFor[_to] += _value;                            // Add the same to the recipient
         return true;
     }
@@ -72,7 +76,7 @@ contract TokenEscrow is usingOraclize, IToken {
     
   address owner;
   
-  uint public ETH_TO_USD_CENT_EXCHANGE_RATE = 32283;
+  uint public ETH_TO_USD_CENT_EXCHANGE_RATE;
   
   event newOraclizeQuery(string description);
 
@@ -99,7 +103,7 @@ contract TokenEscrow is usingOraclize, IToken {
 	tokenSupplies[1] = TokenSupply(2000000, 0, 30);
 	
 	// FIXME: enable oraclize_setProof is production
-    // oraclize_setProof(proofType_TLSNotary | proofStorage_IPFS);
+    oraclize_setProof(proofType_TLSNotary | proofStorage_IPFS);
     update(0);
   }
 
@@ -114,7 +118,7 @@ contract TokenEscrow is usingOraclize, IToken {
     if (msg.sender != oraclize_cbAddress()) throw;
     
     ETH_TO_USD_CENT_EXCHANGE_RATE = parseInt(result, 2); // save it in storage as $ cents
-    // update(60 * 60); // FIXME: comment this out to enable recursive price updates once in every hour
+    update(60 * 60); // Enable recursive price updates once in every hour
   }
 
   function update(uint delay) payable {
@@ -144,7 +148,10 @@ contract TokenEscrow is usingOraclize, IToken {
     if (ETH_TO_USD_CENT_EXCHANGE_RATE == 0)
       throw;
     
-    Escrow escrow = escrows[msg.sender];
+    Escrow escrow = escrows[tx.origin];
+	
+	if (escrow.seller == 0)
+	  throw;
     
 	uint tokenAmount = 0;
 	uint amountOfCentsToBePaid = 0;
